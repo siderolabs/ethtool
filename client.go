@@ -2,6 +2,8 @@ package ethtool
 
 import (
 	"fmt"
+
+	"github.com/siderolabs/gen/optional"
 )
 
 //go:generate stringer -type=Duplex,Port -output=string.go
@@ -338,6 +340,40 @@ func (c *Client) PrivateFlags(ifi Interface) (*PrivateFlags, error) {
 // returned.
 func (c *Client) SetPrivateFlags(p PrivateFlags) error {
 	return c.c.SetPrivateFlags(p)
+}
+
+// Rings contains ring buffer configuration for an interface.
+type Rings struct {
+	Interface Interface
+
+	// Read-only settings reported by the driver.
+	RXMax           optional.Optional[uint32]
+	RXMiniMax       optional.Optional[uint32]
+	RXJumboMax      optional.Optional[uint32]
+	TXMax           optional.Optional[uint32]
+	TXPushBufLenMax optional.Optional[uint32]
+
+	// Current settings (read-write).
+	RX           optional.Optional[uint32]
+	RXMini       optional.Optional[uint32]
+	RXJumbo      optional.Optional[uint32]
+	TX           optional.Optional[uint32]
+	RXBufLen     optional.Optional[uint32]
+	CQESize      optional.Optional[uint32]
+	TXPush       optional.Optional[bool]
+	RXPush       optional.Optional[bool]
+	TXPushBufLen optional.Optional[uint32]
+	TCPDataSplit optional.Optional[bool]
+}
+
+// Rings returns the Ring configuration for the specified Interface.
+func (c *Client) Rings(ifi Interface) (*Rings, error) {
+	return c.c.Rings(ifi)
+}
+
+// SetRings configures rings for a single interface.
+func (c *Client) SetRings(r Rings) error {
+	return c.c.SetRings(r)
 }
 
 // Close cleans up the Client's resources.

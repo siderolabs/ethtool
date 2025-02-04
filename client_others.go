@@ -31,6 +31,8 @@ func (c *client) SetFEC(_ FEC) error                              { return errUn
 func (c *client) AllPrivateFlags() ([]*PrivateFlags, error)       { return nil, errUnsupported }
 func (c *client) PrivateFlags(_ Interface) (*PrivateFlags, error) { return nil, errUnsupported }
 func (c *client) SetPrivateFlags(_ PrivateFlags) error            { return errUnsupported }
+func (c *client) Rings(_ Interface) (*Rings, error)               { return nil, errUnsupported }
+func (c *client) SetRings(_ Rings) error                          { return errUnsupported }
 func (c *client) Close() error                                    { return errUnsupported }
 
 func (f *FEC) Supported() FECModes { return 0 }

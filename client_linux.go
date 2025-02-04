@@ -11,6 +11,7 @@ import (
 
 	"github.com/mdlayher/genetlink"
 	"github.com/mdlayher/netlink"
+	"github.com/siderolabs/gen/optional"
 	"golang.org/x/sys/unix"
 )
 
@@ -523,6 +524,48 @@ func (pf *PrivateFlags) encode(ae *netlink.AttributeEncoder) {
 	})
 }
 
+// Rings fetches Rings for a single interface.
+func (c *client) Rings(ifi Interface) (*Rings, error) {
+	rs, err := c.rings(0, ifi)
+	if err != nil {
+		return nil, err
+	}
+	if f := len(rs); f != 1 {
+		panicf("ethtool: unexpected number of Rings messages for request index: %d, name: %q: %d",
+			ifi.Index, ifi.Name, f)
+	}
+
+	return rs[0], nil
+}
+
+func (c *client) rings(flags netlink.HeaderFlags, ifi Interface) ([]*Rings, error) {
+	msgs, err := c.get(
+		unix.ETHTOOL_A_RINGS_HEADER,
+		unix.ETHTOOL_MSG_RINGS_GET,
+		flags,
+		ifi,
+		nil,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseRings(msgs)
+}
+
+// SetRings configures rings for a single
+// ethtool-supported interface.
+func (c *client) SetRings(rings Rings) error {
+	_, err := c.get(
+		unix.ETHTOOL_A_RINGS_HEADER,
+		unix.ETHTOOL_MSG_RINGS_SET,
+		netlink.Acknowledge,
+		rings.Interface,
+		rings.encode,
+	)
+	return err
+}
+
 // get performs a request/response interaction with ethtool netlink.
 func (c *client) get(
 	header uint16,
@@ -925,6 +968,138 @@ func parseInterface(ifi *Interface) func(*netlink.AttributeDecoder) error {
 			}
 		}
 		return nil
+	}
+}
+
+// Extra rings contants
+const (
+	ETHTOOL_A_RINGS_RX_PUSH             = unix.ETHTOOL_A_RINGS_TX_PUSH + 1
+	ETHTOOL_A_RINGS_TX_PUSH_BUF_LEN     = unix.ETHTOOL_A_RINGS_TX_PUSH + 2
+	ETHTOOL_A_RINGS_TX_PUSH_BUF_LEN_MAX = unix.ETHTOOL_A_RINGS_TX_PUSH + 3
+
+	ETHTOOL_TCP_DATA_SPLIT_UNKNOWN  = 0
+	ETHTOOL_TCP_DATA_SPLIT_DISABLED = 1
+	ETHTOOL_TCP_DATA_SPLIT_ENABLED  = 2
+)
+
+// parseRings parses Rings structures from a slice of generic netlink
+// messages.
+func parseRings(msgs []genetlink.Message) ([]*Rings, error) {
+	rings := make([]*Rings, 0, len(msgs))
+	for _, m := range msgs {
+		ad, err := netlink.NewAttributeDecoder(m.Data)
+		if err != nil {
+			return nil, err
+		}
+
+		var ring Rings
+		for ad.Next() {
+			switch ad.Type() {
+			case unix.ETHTOOL_A_RINGS_HEADER:
+				ad.Nested(parseInterface(&ring.Interface))
+			case unix.ETHTOOL_A_RINGS_RX_MAX:
+				ring.RXMax = optional.Some(ad.Uint32())
+			case unix.ETHTOOL_A_RINGS_RX_MINI_MAX:
+				ring.RXMiniMax = optional.Some(ad.Uint32())
+			case unix.ETHTOOL_A_RINGS_RX_JUMBO_MAX:
+				ring.RXJumboMax = optional.Some(ad.Uint32())
+			case unix.ETHTOOL_A_RINGS_TX_MAX:
+				ring.TXMax = optional.Some(ad.Uint32())
+			case unix.ETHTOOL_A_RINGS_RX:
+				ring.RX = optional.Some(ad.Uint32())
+			case unix.ETHTOOL_A_RINGS_RX_MINI:
+				ring.RXMini = optional.Some(ad.Uint32())
+			case unix.ETHTOOL_A_RINGS_RX_JUMBO:
+				ring.RXJumbo = optional.Some(ad.Uint32())
+			case unix.ETHTOOL_A_RINGS_TX:
+				ring.TX = optional.Some(ad.Uint32())
+			case unix.ETHTOOL_A_RINGS_RX_BUF_LEN:
+				ring.RXBufLen = optional.Some(ad.Uint32())
+			case unix.ETHTOOL_A_RINGS_TCP_DATA_SPLIT:
+				switch ad.Uint8() {
+				case ETHTOOL_TCP_DATA_SPLIT_UNKNOWN:
+				case ETHTOOL_TCP_DATA_SPLIT_DISABLED:
+					ring.TCPDataSplit = optional.Some(false)
+				case ETHTOOL_TCP_DATA_SPLIT_ENABLED:
+					ring.TCPDataSplit = optional.Some(true)
+				}
+			case unix.ETHTOOL_A_RINGS_CQE_SIZE:
+				ring.CQESize = optional.Some(ad.Uint32())
+			case unix.ETHTOOL_A_RINGS_TX_PUSH:
+				ring.TXPush = optional.Some(ad.Uint8() != 0)
+			case ETHTOOL_A_RINGS_RX_PUSH:
+				ring.RXPush = optional.Some(ad.Uint8() != 0)
+			case ETHTOOL_A_RINGS_TX_PUSH_BUF_LEN:
+				ring.TXPushBufLen = optional.Some(ad.Uint32())
+			case ETHTOOL_A_RINGS_TX_PUSH_BUF_LEN_MAX:
+				ring.TXPushBufLenMax = optional.Some(ad.Uint32())
+			}
+		}
+
+		if err := ad.Err(); err != nil {
+			return nil, err
+		}
+
+		rings = append(rings, &ring)
+	}
+
+	return rings, nil
+}
+
+func (r Rings) encode(ae *netlink.AttributeEncoder) {
+	if v, ok := r.RX.Get(); ok {
+		ae.Uint32(unix.ETHTOOL_A_RINGS_RX, v)
+	}
+
+	if v, ok := r.RXMini.Get(); ok {
+		ae.Uint32(unix.ETHTOOL_A_RINGS_RX_MINI, v)
+	}
+
+	if v, ok := r.RXJumbo.Get(); ok {
+		ae.Uint32(unix.ETHTOOL_A_RINGS_RX_JUMBO, v)
+	}
+
+	if v, ok := r.TX.Get(); ok {
+		ae.Uint32(unix.ETHTOOL_A_RINGS_TX, v)
+	}
+
+	if v, ok := r.TXPushBufLen.Get(); ok {
+		ae.Uint32(ETHTOOL_A_RINGS_TX_PUSH_BUF_LEN, v)
+	}
+
+	if v, ok := r.RXBufLen.Get(); ok {
+		ae.Uint32(unix.ETHTOOL_A_RINGS_RX_BUF_LEN, v)
+	}
+
+	if v, ok := r.TCPDataSplit.Get(); ok {
+		switch v {
+		case false:
+			ae.Uint8(unix.ETHTOOL_A_RINGS_TCP_DATA_SPLIT, ETHTOOL_TCP_DATA_SPLIT_DISABLED)
+		case true:
+			ae.Uint8(unix.ETHTOOL_A_RINGS_TCP_DATA_SPLIT, ETHTOOL_TCP_DATA_SPLIT_ENABLED)
+		}
+	}
+
+	if v, ok := r.CQESize.Get(); ok {
+		ae.Uint32(unix.ETHTOOL_A_RINGS_CQE_SIZE, v)
+	}
+
+	if v, ok := r.TXPush.Get(); ok {
+		switch v {
+		case false:
+			ae.Uint8(unix.ETHTOOL_A_RINGS_TX_PUSH, 0)
+		case true:
+			ae.Uint8(unix.ETHTOOL_A_RINGS_TX_PUSH, 1)
+		}
+	}
+
+	if v, ok := r.RXPush.Get(); ok {
+		switch v {
+		case false:
+			ae.Uint8(ETHTOOL_A_RINGS_RX_PUSH, 0)
+		case true:
+			ae.Uint8(ETHTOOL_A_RINGS_RX_PUSH, 1)
+		}
 	}
 }
 
