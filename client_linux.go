@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/mdlayher/genetlink"
 	"github.com/mdlayher/netlink"
@@ -20,7 +21,12 @@ var errBadRequest = errors.New("ethtool: Request must have Index and/or Name set
 
 // A client is the Linux implementation backing a Client.
 type client struct {
-	c         *genetlink.Conn
+	c *genetlink.Conn
+
+	featuresOnce  sync.Once
+	featuresCache StringSet
+	featuresErr   error
+
 	family    uint16
 	monitorID uint32
 }
@@ -566,6 +572,218 @@ func (c *client) SetRings(rings Rings) error {
 	return err
 }
 
+const (
+	_ETH_SS_FEATURES = 4
+)
+
+func (c *client) cachedFeaturesStringSet() (StringSet, error) {
+	c.featuresOnce.Do(func() {
+		c.featuresCache, c.featuresErr = c.FeaturesStringSet()
+	})
+
+	return c.featuresCache, c.featuresErr
+}
+
+// FeaturesStringSet fetches the feature string set.
+func (c *client) FeaturesStringSet() (StringSet, error) {
+	return c.fetchStringSet(_ETH_SS_FEATURES)
+}
+
+func (c *client) fetchStringSet(set uint32) (StringSet, error) {
+	ae := netlink.NewAttributeEncoder()
+	ae.Uint32(unix.ETHTOOL_A_HEADER_DEV_INDEX, set)
+
+	msgs, err := c.get(
+		unix.ETHTOOL_A_STRSET_HEADER,
+		unix.ETHTOOL_MSG_STRSET_GET,
+		0,
+		Interface{},
+		func(ae *netlink.AttributeEncoder) {
+			ae.Nested(unix.ETHTOOL_A_STRSET_STRINGSETS, func(nae *netlink.AttributeEncoder) error {
+				nae.Nested(unix.ETHTOOL_A_STRINGSETS_STRINGSET, func(nnae *netlink.AttributeEncoder) error {
+					nnae.Uint32(unix.ETHTOOL_A_STRINGSET_ID, set)
+
+					return nil
+				})
+
+				return nil
+			})
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseStringSet(msgs)
+}
+
+func parseStringsStringContents(result StringSet) func(ad *netlink.AttributeDecoder) error {
+	return func(ad *netlink.AttributeDecoder) error {
+		var (
+			id    uint32
+			value string
+		)
+
+		for ad.Next() {
+			switch ad.Type() {
+			case unix.ETHTOOL_A_STRING_INDEX:
+				id = ad.Uint32()
+			case unix.ETHTOOL_A_STRING_VALUE:
+				value = ad.String()
+			}
+		}
+
+		result[id] = value
+
+		if err := ad.Err(); err != nil {
+			return fmt.Errorf("error parsing strings string content: %w", err)
+		}
+
+		return nil
+	}
+}
+
+func parseStringsString(result StringSet) func(ad *netlink.AttributeDecoder) error {
+	return func(ad *netlink.AttributeDecoder) error {
+		for ad.Next() {
+			if ad.Type() == unix.ETHTOOL_A_STRINGS_STRING {
+				ad.Nested(parseStringsStringContents(result))
+			}
+		}
+
+		if err := ad.Err(); err != nil {
+			return fmt.Errorf("error parsing strings string: %w", err)
+		}
+
+		return nil
+	}
+}
+
+func parseStringSetStrings(result StringSet) func(ad *netlink.AttributeDecoder) error {
+	return func(ad *netlink.AttributeDecoder) error {
+		for ad.Next() {
+			if ad.Type() == unix.ETHTOOL_A_STRINGSET_STRINGS {
+				ad.Nested(parseStringsString(result))
+			}
+		}
+
+		if err := ad.Err(); err != nil {
+			return fmt.Errorf("error parsing string set strings: %w", err)
+		}
+
+		return nil
+	}
+}
+
+func parseStringSetsStringSet(result StringSet) func(ad *netlink.AttributeDecoder) error {
+	return func(ad *netlink.AttributeDecoder) error {
+		for ad.Next() {
+			if ad.Type() == unix.ETHTOOL_A_STRINGSETS_STRINGSET {
+				ad.Nested(parseStringSetStrings(result))
+			}
+		}
+
+		if err := ad.Err(); err != nil {
+			return fmt.Errorf("error parsing string sets string set: %w", err)
+		}
+
+		return nil
+	}
+}
+
+func parseStrSetStringSets(result StringSet) func(ad *netlink.AttributeDecoder) error {
+	return func(ad *netlink.AttributeDecoder) error {
+		for ad.Next() {
+			if ad.Type() == unix.ETHTOOL_A_STRSET_STRINGSETS {
+				ad.Nested(parseStringSetsStringSet(result))
+			}
+		}
+
+		if err := ad.Err(); err != nil {
+			return fmt.Errorf("error parsing strset string sets: %w", err)
+		}
+
+		return nil
+	}
+}
+
+func parseStringSet(msgs []genetlink.Message) (StringSet, error) {
+	result := StringSet{}
+
+	for _, m := range msgs {
+		ad, err := netlink.NewAttributeDecoder(m.Data)
+		if err != nil {
+			return nil, err
+		}
+
+		if err = parseStrSetStringSets(result)(ad); err != nil {
+			return nil, fmt.Errorf("error parsing string set: %w", err)
+		}
+
+		if err := ad.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	return result, nil
+}
+
+// Features returns feature informantion for an interfaces.
+func (c *client) Features(ifi Interface) ([]FeatureInfo, error) {
+	return c.features(0, ifi)
+}
+
+func (c *client) features(flags netlink.HeaderFlags, ifi Interface) ([]FeatureInfo, error) {
+	msgs, err := c.get(
+		unix.ETHTOOL_A_FEATURES_HEADER,
+		unix.ETHTOOL_MSG_FEATURES_GET,
+		flags,
+		ifi,
+		nil,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	featureSet, err := c.cachedFeaturesStringSet()
+	if err != nil {
+		return nil, err
+	}
+
+	return parseFeatures(msgs, featureSet)
+}
+
+// SetFeatures configures features for a single ethtool-supported interface.
+func (c *client) SetFeatures(ifi Interface, features map[string]bool) error {
+	_, err := c.get(
+		unix.ETHTOOL_A_FEATURES_HEADER,
+		unix.ETHTOOL_MSG_FEATURES_SET,
+		netlink.Acknowledge,
+		ifi,
+		wantedFeatures(features).encode,
+	)
+	return err
+}
+
+type wantedFeatures map[string]bool
+
+func (f wantedFeatures) encode(ae *netlink.AttributeEncoder) {
+	ae.Nested(unix.ETHTOOL_A_FEATURES_WANTED, func(nae *netlink.AttributeEncoder) error {
+		nae.Nested(unix.ETHTOOL_A_BITSET_BITS, func(nae *netlink.AttributeEncoder) error {
+			for name, value := range f {
+				nae.Nested(unix.ETHTOOL_A_BITSET_BITS_BIT, func(nae *netlink.AttributeEncoder) error {
+					nae.String(unix.ETHTOOL_A_BITSET_BIT_NAME, name)
+					nae.Flag(unix.ETHTOOL_A_BITSET_BIT_VALUE, value)
+
+					return nil
+				})
+			}
+			return nil
+		})
+		return nil
+	})
+}
+
 // get performs a request/response interaction with ethtool netlink.
 func (c *client) get(
 	header uint16,
@@ -575,7 +793,7 @@ func (c *client) get(
 	// May be nil; used to apply optional parameters.
 	params func(ae *netlink.AttributeEncoder),
 ) ([]genetlink.Message, error) {
-	if flags&netlink.Dump == 0 && ifi.Index == 0 && ifi.Name == "" {
+	if flags&netlink.Dump == 0 && ifi.Index == 0 && ifi.Name == "" && cmd != unix.ETHTOOL_MSG_STRSET_GET {
 		// The caller is not requesting to dump information for multiple
 		// interfaces and thus has to specify some identifier or the kernel will
 		// EINVAL on this path.
@@ -605,6 +823,7 @@ func (c *client) get(
 		// format, so we might as well always use it.
 		if cmd != unix.ETHTOOL_MSG_FEC_SET &&
 			cmd != unix.ETHTOOL_MSG_WOL_SET &&
+			cmd != unix.ETHTOOL_MSG_FEATURES_SET &&
 			cmd != unix.ETHTOOL_MSG_PRIVFLAGS_GET &&
 			cmd != unix.ETHTOOL_MSG_PRIVFLAGS_SET {
 			nae.Uint32(unix.ETHTOOL_A_HEADER_FLAGS, unix.ETHTOOL_FLAG_COMPACT_BITSETS)
@@ -1044,6 +1263,82 @@ func parseRings(msgs []genetlink.Message) ([]*Rings, error) {
 	}
 
 	return rings, nil
+}
+
+// parseFeatyres parses FeatureInfo structures from a slice of generic netlink
+// messages.
+func parseFeatures(msgs []genetlink.Message, featureStrings StringSet) ([]FeatureInfo, error) {
+	if len(msgs) != 1 {
+		return nil, fmt.Errorf("ethtool: unexpected number of Features messages: %d", len(msgs))
+	}
+
+	m := msgs[0]
+
+	ad, err := netlink.NewAttributeDecoder(m.Data)
+	if err != nil {
+		return nil, err
+	}
+
+	var hw, wanted, active, noChange bitset
+
+	for ad.Next() {
+		switch ad.Type() {
+		case unix.ETHTOOL_A_FEATURES_HW:
+			ad.Nested(func(nad *netlink.AttributeDecoder) error {
+				hw, err = newBitset(nad)
+
+				return err
+			})
+		case unix.ETHTOOL_A_FEATURES_WANTED:
+			ad.Nested(func(nad *netlink.AttributeDecoder) error {
+				wanted, err = newBitset(nad)
+
+				return err
+			})
+		case unix.ETHTOOL_A_FEATURES_ACTIVE:
+			ad.Nested(func(nad *netlink.AttributeDecoder) error {
+				active, err = newBitset(nad)
+
+				return err
+			})
+		case unix.ETHTOOL_A_FEATURES_NOCHANGE:
+			ad.Nested(func(nad *netlink.AttributeDecoder) error {
+				noChange, err = newBitset(nad)
+
+				return err
+			})
+		}
+	}
+
+	if err := ad.Err(); err != nil {
+		return nil, err
+	}
+
+	if len(hw) != len(wanted) || len(wanted) != len(active) || len(active) != len(noChange) {
+		return nil, fmt.Errorf("ethtool: unexpected number of feature bitsets: %d, %d, %d, %d",
+			len(hw), len(wanted), len(active), len(noChange))
+	}
+
+	numBits := len(hw) * 32
+
+	result := make([]FeatureInfo, 0, numBits)
+
+	for bit := range numBits {
+		name := featureStrings[uint32(bit)]
+		if name == "" {
+			continue
+		}
+
+		result = append(result, FeatureInfo{
+			Name:      name,
+			Active:    active.test(bit),
+			NoChange:  noChange.test(bit),
+			Wanted:    wanted.test(bit),
+			Supported: hw.test(bit),
+		})
+	}
+
+	return result, nil
 }
 
 func (r Rings) encode(ae *netlink.AttributeEncoder) {

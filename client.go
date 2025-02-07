@@ -376,5 +376,56 @@ func (c *Client) SetRings(r Rings) error {
 	return c.c.SetRings(r)
 }
 
+// StringSet is a set of strings with index-based access.
+type StringSet map[uint32]string
+
+// FeaturesStringSet returns a string set describing the feature bits.
+func (c *Client) FeaturesStringSet() (StringSet, error) {
+	return c.c.FeaturesStringSet()
+}
+
+// FeatureInfo describes the current of features for an interface.
+type FeatureInfo struct {
+	Name      string
+	Supported bool
+	Wanted    bool
+	Active    bool
+	NoChange  bool
+}
+
+func (f FeatureInfo) State() string {
+	switch f.Active {
+	case true:
+		return "on"
+	default:
+		return "off"
+	}
+}
+
+func (f FeatureInfo) Suffix() string {
+	switch {
+	case !f.Supported || f.NoChange:
+		return " [fixed]"
+	case f.Active != f.Wanted:
+		if f.Wanted {
+			return " [requested on]"
+		} else {
+			return " [requested off]"
+		}
+	default:
+		return ""
+	}
+}
+
+// Features returns the feature information for the specified Interface.
+func (c *Client) Features(ifi Interface) ([]FeatureInfo, error) {
+	return c.c.Features(ifi)
+}
+
+// SetFeatures sets the features for the specified Interface.
+func (c *Client) SetFeatures(ifi Interface, features map[string]bool) error {
+	return c.c.SetFeatures(ifi, features)
+}
+
 // Close cleans up the Client's resources.
 func (c *Client) Close() error { return c.c.Close() }
