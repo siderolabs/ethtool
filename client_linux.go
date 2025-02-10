@@ -818,6 +818,8 @@ func (c *client) get(
 			nae.String(unix.ETHTOOL_A_HEADER_DEV_NAME, ifi.Name)
 		}
 
+		var headerFlags uint32
+
 		// Unconditionally add the compact bitsets flag to all query commands
 		// since the ethtool multicast group notifications require the compact
 		// format, so we might as well always use it.
@@ -826,7 +828,15 @@ func (c *client) get(
 			cmd != unix.ETHTOOL_MSG_FEATURES_SET &&
 			cmd != unix.ETHTOOL_MSG_PRIVFLAGS_GET &&
 			cmd != unix.ETHTOOL_MSG_PRIVFLAGS_SET {
-			nae.Uint32(unix.ETHTOOL_A_HEADER_FLAGS, unix.ETHTOOL_FLAG_COMPACT_BITSETS)
+			headerFlags |= unix.ETHTOOL_FLAG_COMPACT_BITSETS
+		}
+
+		if cmd == unix.ETHTOOL_MSG_FEATURES_SET {
+			headerFlags |= unix.ETHTOOL_FLAG_OMIT_REPLY
+		}
+
+		if headerFlags != 0 {
+			nae.Uint32(unix.ETHTOOL_A_HEADER_FLAGS, headerFlags)
 		}
 
 		return nil
