@@ -572,6 +572,48 @@ func (c *client) SetRings(rings Rings) error {
 	return err
 }
 
+// Channels fetches channels for a single interface.
+func (c *client) Channels(ifi Interface) (*Channels, error) {
+	cs, err := c.channels(0, ifi)
+	if err != nil {
+		return nil, err
+	}
+	if f := len(cs); f != 1 {
+		panicf("ethtool: unexpected number of Channels messages for request index: %d, name: %q: %d",
+			ifi.Index, ifi.Name, f)
+	}
+
+	return cs[0], nil
+}
+
+func (c *client) channels(flags netlink.HeaderFlags, ifi Interface) ([]*Channels, error) {
+	msgs, err := c.get(
+		unix.ETHTOOL_A_CHANNELS_HEADER,
+		unix.ETHTOOL_MSG_CHANNELS_GET,
+		flags,
+		ifi,
+		nil,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseChannels(msgs)
+}
+
+// SetChannels configures channels for a single
+// ethtool-supported interface.
+func (c *client) SetChannels(channels Channels) error {
+	_, err := c.get(
+		unix.ETHTOOL_A_CHANNELS_HEADER,
+		unix.ETHTOOL_MSG_CHANNELS_SET,
+		netlink.Acknowledge,
+		channels.Interface,
+		channels.encode,
+	)
+	return err
+}
+
 const (
 	_ETH_SS_FEATURES = 4
 )
@@ -1275,7 +1317,51 @@ func parseRings(msgs []genetlink.Message) ([]*Rings, error) {
 	return rings, nil
 }
 
-// parseFeatyres parses FeatureInfo structures from a slice of generic netlink
+// parseChannels parses Channels structures from a slice of generic netlink
+// messages.
+func parseChannels(msgs []genetlink.Message) ([]*Channels, error) {
+	channels := make([]*Channels, 0, len(msgs))
+	for _, m := range msgs {
+		ad, err := netlink.NewAttributeDecoder(m.Data)
+		if err != nil {
+			return nil, err
+		}
+
+		var channel Channels
+		for ad.Next() {
+			switch ad.Type() {
+			case unix.ETHTOOL_A_CHANNELS_HEADER:
+				ad.Nested(parseInterface(&channel.Interface))
+			case unix.ETHTOOL_A_CHANNELS_RX_MAX:
+				channel.RXMax = optional.Some(ad.Uint32())
+			case unix.ETHTOOL_A_CHANNELS_TX_MAX:
+				channel.TXMax = optional.Some(ad.Uint32())
+			case unix.ETHTOOL_A_CHANNELS_OTHER_MAX:
+				channel.OtherMax = optional.Some(ad.Uint32())
+			case unix.ETHTOOL_A_CHANNELS_COMBINED_MAX:
+				channel.CombinedMax = optional.Some(ad.Uint32())
+			case unix.ETHTOOL_A_CHANNELS_RX_COUNT:
+				channel.RXCount = optional.Some(ad.Uint32())
+			case unix.ETHTOOL_A_CHANNELS_TX_COUNT:
+				channel.TXCount = optional.Some(ad.Uint32())
+			case unix.ETHTOOL_A_CHANNELS_OTHER_COUNT:
+				channel.OtherCount = optional.Some(ad.Uint32())
+			case unix.ETHTOOL_A_CHANNELS_COMBINED_COUNT:
+				channel.CombinedCount = optional.Some(ad.Uint32())
+			}
+		}
+
+		if err := ad.Err(); err != nil {
+			return nil, err
+		}
+
+		channels = append(channels, &channel)
+	}
+
+	return channels, nil
+}
+
+// parseFeatures parses FeatureInfo structures from a slice of generic netlink
 // messages.
 func parseFeatures(msgs []genetlink.Message, featureStrings StringSet) ([]FeatureInfo, error) {
 	if len(msgs) != 1 {
@@ -1405,6 +1491,24 @@ func (r Rings) encode(ae *netlink.AttributeEncoder) {
 		case true:
 			ae.Uint8(ETHTOOL_A_RINGS_RX_PUSH, 1)
 		}
+	}
+}
+
+func (r Channels) encode(ae *netlink.AttributeEncoder) {
+	if v, ok := r.RXCount.Get(); ok {
+		ae.Uint32(unix.ETHTOOL_A_CHANNELS_RX_COUNT, v)
+	}
+
+	if v, ok := r.TXCount.Get(); ok {
+		ae.Uint32(unix.ETHTOOL_A_CHANNELS_TX_COUNT, v)
+	}
+
+	if v, ok := r.OtherCount.Get(); ok {
+		ae.Uint32(unix.ETHTOOL_A_CHANNELS_OTHER_COUNT, v)
+	}
+
+	if v, ok := r.CombinedCount.Get(); ok {
+		ae.Uint32(unix.ETHTOOL_A_CHANNELS_COMBINED_COUNT, v)
 	}
 }
 

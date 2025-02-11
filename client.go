@@ -366,6 +366,23 @@ type Rings struct {
 	TCPDataSplit optional.Optional[bool]
 }
 
+// Channels contains channel configuration for an interface.
+type Channels struct {
+	Interface Interface
+
+	// Read-only settings reported by the driver.
+	RXMax       optional.Optional[uint32]
+	TXMax       optional.Optional[uint32]
+	OtherMax    optional.Optional[uint32]
+	CombinedMax optional.Optional[uint32]
+
+	// Current settings (read-write).
+	RXCount       optional.Optional[uint32]
+	TXCount       optional.Optional[uint32]
+	OtherCount    optional.Optional[uint32]
+	CombinedCount optional.Optional[uint32]
+}
+
 // Rings returns the Ring configuration for the specified Interface.
 func (c *Client) Rings(ifi Interface) (*Rings, error) {
 	return c.c.Rings(ifi)
@@ -374,6 +391,16 @@ func (c *Client) Rings(ifi Interface) (*Rings, error) {
 // SetRings configures rings for a single interface.
 func (c *Client) SetRings(r Rings) error {
 	return c.c.SetRings(r)
+}
+
+// Channels returns the Channel configuration for the specified Interface.
+func (c *Client) Channels(ifi Interface) (*Channels, error) {
+	return c.c.Channels(ifi)
+}
+
+// SetChannels configures channels for a single interface.
+func (c *Client) SetChannels(ch Channels) error {
+	return c.c.SetChannels(ch)
 }
 
 // StringSet is a set of strings with index-based access.

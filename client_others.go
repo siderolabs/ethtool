@@ -33,6 +33,8 @@ func (c *client) PrivateFlags(_ Interface) (*PrivateFlags, error)           { re
 func (c *client) SetPrivateFlags(_ PrivateFlags) error                      { return errUnsupported }
 func (c *client) Rings(_ Interface) (*Rings, error)                         { return nil, errUnsupported }
 func (c *client) SetRings(_ Rings) error                                    { return errUnsupported }
+func (c *client) Channels(_ Interface) (*Channels, error)                   { return nil, errUnsupported }
+func (c *client) SetChannels(_ Channels) error                              { return errUnsupported }
 func (c *client) FeaturesStringSet() (StringSet, error)                     { return nil, errUnsupported }
 func (c *client) Features(_ Interface) ([]FeatureInfo, error)               { return nil, errUnsupported }
 func (c *client) SetFeatures(ifi Interface, features map[string]bool) error { return errUnsupported }
