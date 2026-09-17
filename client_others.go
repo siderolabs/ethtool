@@ -35,6 +35,8 @@ func (c *client) UpdateLinkMode(_ Interface, _ *LinkModeUpdate) error       { re
 func (c *client) Rings(_ Interface) (*Rings, error)                         { return nil, errUnsupported }
 func (c *client) SetRings(_ Rings) error                                    { return errUnsupported }
 func (c *client) Channels(_ Interface) (*Channels, error)                   { return nil, errUnsupported }
+func (c *client) Pause(_ Interface) (*Pause, error)                         { return nil, errUnsupported }
+func (c *client) SetPause(_ Pause) error                                    { return errUnsupported }
 func (c *client) SetChannels(_ Channels) error                              { return errUnsupported }
 func (c *client) FeaturesStringSet() (StringSet, error)                     { return nil, errUnsupported }
 func (c *client) Features(_ Interface) ([]FeatureInfo, error)               { return nil, errUnsupported }

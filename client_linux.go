@@ -661,6 +661,48 @@ func (c *client) SetChannels(channels Channels) error {
 	return err
 }
 
+// Pause fetches Pause support (flow control) for a single interface.
+func (c *client) Pause(ifi Interface) (*Pause, error) {
+	ps, err := c.pause(0, ifi)
+	if err != nil {
+		return nil, err
+	}
+	if f := len(ps); f != 1 {
+		panicf("ethtool: unexpected number of Pause messages for request index: %d, name: %q: %d",
+			ifi.Index, ifi.Name, f)
+	}
+
+	return ps[0], nil
+}
+
+func (c *client) pause(flags netlink.HeaderFlags, ifi Interface) ([]*Pause, error) {
+	msgs, err := c.get(
+		unix.ETHTOOL_A_PAUSE_HEADER,
+		unix.ETHTOOL_MSG_PAUSE_GET,
+		flags,
+		ifi,
+		nil,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return parsePause(msgs)
+}
+
+// SetPause configures support of pause frames (flow control) for a single
+// ethtool-supported interface.
+func (c *client) SetPause(pause Pause) error {
+	_, err := c.get(
+		unix.ETHTOOL_A_PAUSE_HEADER,
+		unix.ETHTOOL_MSG_PAUSE_SET,
+		netlink.Acknowledge,
+		pause.Interface,
+		pause.encode,
+	)
+	return err
+}
+
 const (
 	_ETH_SS_FEATURES = 4
 )
@@ -1409,6 +1451,39 @@ func parseChannels(msgs []genetlink.Message) ([]*Channels, error) {
 
 	return channels, nil
 }
+// parsePause parses Pause structures from a slice of generic netlink
+// messages.
+func parsePause(msgs []genetlink.Message) ([]*Pause, error) {
+	pauses := make([]*Pause, 0, len(msgs))
+	for _, m := range msgs {
+		ad, err := netlink.NewAttributeDecoder(m.Data)
+		if err != nil {
+			return nil, err
+		}
+
+		var p Pause
+		for ad.Next() {
+			switch ad.Type() {
+			case unix.ETHTOOL_A_PAUSE_HEADER:
+				ad.Nested(parseInterface(&p.Interface))
+			case unix.ETHTOOL_A_PAUSE_RX:
+				p.RX = optional.Some(ad.Uint8() != 0)
+			case unix.ETHTOOL_A_PAUSE_TX:
+				p.TX = optional.Some(ad.Uint8() != 0)
+			case unix.ETHTOOL_A_PAUSE_AUTONEG:
+				p.Autoneg = optional.Some(ad.Uint8() != 0)
+			}
+		}
+
+		if err := ad.Err(); err != nil {
+			return nil, err
+		}
+
+		pauses = append(pauses, &p)
+	}
+
+	return pauses, nil
+}
 
 // parseFeatures parses FeatureInfo structures from a slice of generic netlink
 // messages.
@@ -1558,6 +1633,32 @@ func (r Channels) encode(ae *netlink.AttributeEncoder) {
 
 	if v, ok := r.CombinedCount.Get(); ok {
 		ae.Uint32(unix.ETHTOOL_A_CHANNELS_COMBINED_COUNT, v)
+	}
+}
+
+func (p Pause) encode(ae *netlink.AttributeEncoder) {
+	if v, ok := p.RX.Get(); ok {
+		if v {
+			ae.Uint8(unix.ETHTOOL_A_PAUSE_RX, 1)
+		} else {
+			ae.Uint8(unix.ETHTOOL_A_PAUSE_RX, 0)
+		}
+	}
+
+	if v, ok := p.TX.Get(); ok {
+		if v {
+			ae.Uint8(unix.ETHTOOL_A_PAUSE_TX, 1)
+		} else {
+			ae.Uint8(unix.ETHTOOL_A_PAUSE_TX, 0)
+		}
+	}
+
+	if v, ok := p.Autoneg.Get(); ok {
+		if v {
+			ae.Uint8(unix.ETHTOOL_A_PAUSE_AUTONEG, 1)
+		} else {
+			ae.Uint8(unix.ETHTOOL_A_PAUSE_AUTONEG, 0)
+		}
 	}
 }
 

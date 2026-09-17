@@ -421,6 +421,16 @@ type Channels struct {
 	CombinedCount optional.Optional[uint32]
 }
 
+// Pause contains Pause support (flow control) configuration for an interface.
+type Pause struct {
+	Interface Interface
+
+	// Current settings (read-write).
+	RX      optional.Optional[bool]
+	TX      optional.Optional[bool]
+	Autoneg optional.Optional[bool]
+}
+
 // Rings returns the Ring configuration for the specified Interface.
 func (c *Client) Rings(ifi Interface) (*Rings, error) {
 	return c.c.Rings(ifi)
@@ -439,6 +449,16 @@ func (c *Client) Channels(ifi Interface) (*Channels, error) {
 // SetChannels configures channels for a single interface.
 func (c *Client) SetChannels(ch Channels) error {
 	return c.c.SetChannels(ch)
+}
+
+// Pause returns the Pause support (flow control) configuration for the specified Interface.
+func (c *Client) Pause(ifi Interface) (*Pause, error) {
+	return c.c.Pause(ifi)
+}
+
+// SetPause configures Pause support (flow control) for a single interface.
+func (c *Client) SetPause(p Pause) error {
+	return c.c.SetPause(p)
 }
 
 // StringSet is a set of strings with index-based access.

@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/mdlayher/ethtool"
+	"github.com/siderolabs/gen/optional"
 	"golang.org/x/sys/unix"
 )
 
@@ -118,6 +119,43 @@ func run() error {
 	}
 
 	fmt.Printf("Channels for %s: %#+v\n", linkName, channels)
+
+	pause, err := cli.Pause(ethtool.Interface{Name: linkName})
+	if err != nil {
+		if errors.Is(err, unix.EOPNOTSUPP) {
+			fmt.Printf("Pause (flow control) is not supported for %s\n", linkName)
+		} else {
+			return fmt.Errorf("failed to get pause settings: %v", err)
+		}
+	} else {
+		fmt.Printf("Pause for %s: RX %v TX %v Autoneg %v, all %#+v\n", linkName, pause.RX.ValueOrZero(), pause.TX.ValueOrZero(), pause.Autoneg.ValueOrZero(), pause)
+	}
+
+	err = cli.SetPause(ethtool.Pause{
+		Interface: ethtool.Interface{Name: linkName},
+		RX:        optional.Some[bool](false),
+		TX:        optional.Some[bool](false),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to set pause: %v", err)
+	}
+
+	err = cli.SetPause(ethtool.Pause{
+		Interface: ethtool.Interface{Name: linkName},
+		RX:        optional.Some[bool](true),
+		TX:        optional.Some[bool](true),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to set pause: %v", err)
+	}
+
+	err = cli.SetPause(ethtool.Pause{
+		Interface: ethtool.Interface{Name: linkName},
+		Autoneg:   optional.Some[bool](true),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to set pause: %v", err)
+	}
 
 	return nil
 }
